@@ -2861,6 +2861,26 @@ Bug Fixes:
   pieces in reading order instead of stacking
   them on separate lines. Pieces on different
   lines still copy with line breaks.
+- Two advanced settings refine paragraph
+  direction detection for terminal use, where
+  a prompt or an English label often precedes
+  right-to-left text. “Minimum right-to-left
+  words” lays a line out right-to-left once it
+  holds at least that many Arabic, Persian, or
+  Hebrew words even if it starts with a Latin
+  word; “keep lines that start with a Latin
+  word left-to-right” makes the first strong
+  character final for such lines and, combined
+  with a minimum, applies the minimum only to
+  lines that open right-to-left. Both are off
+  by default, which is plain first-strong
+  detection.
+- The glyph rasterizer now clears its whole
+  bitmap between glyphs instead of only the
+  glyph’s nominal frame, so cursive or
+  wide-ligature ink that overflows the frame no
+  longer bleeds into the next glyph or trips
+  the debug overflow check.
 - Fixed a bug where the Keys > General tab in
   the Edit Session window could appear empty
   for a terminal session after editing a

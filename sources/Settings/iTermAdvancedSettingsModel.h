@@ -452,6 +452,8 @@ extern NSString *const iTermAdvancedSettingsDidChange;
 + (BOOL)retinaInlineImages;
 + (BOOL)revealExportedSettingsAndData;
 + (BOOL)rightJustifyRTLLines;
++ (BOOL)rtlParagraphLatinFirstWordStaysLTR;
++ (int)rtlParagraphMinimumWords;
 + (BOOL)runJobsInServers;
 + (BOOL)saveToPasteHistoryWhenSecureInputEnabled;
 + (double)scrollWheelAcceleration;
