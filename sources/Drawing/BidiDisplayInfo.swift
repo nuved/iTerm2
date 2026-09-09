@@ -289,26 +289,27 @@ fileprivate func makeLookupTable(_ string: NSString,
 // Rohingya) and misdetect lines written in them.
 //
 // Two optional advanced settings refine that for terminal use, where a shell
-// prompt or an agent's English label often precedes right-to-left text:
+// prompt or an agent's English label often precedes right-to-left text. Each
+// is a word minimum for one kind of line; 0 means "as first-strong decides":
 //
-// - rtlParagraphMinimumWords (N > 0): a line that opens left-to-right still lays
-//   out right-to-left once it holds at least N right-to-left words. A "word" is
-//   a maximal group of strong-RTL characters; a space or a strong-LTR character
-//   ends it, while neutrals and marks (the ZWNJ inside دانش‌آموزان, combining
-//   marks) do not, so such a word counts once.
-// - rtlParagraphLatinFirstWordStaysLTR: a line that opens left-to-right is
-//   always left-to-right, regardless of the minimum. A line that opens
-//   right-to-left is right-to-left, or, when a minimum is set, only when it
-//   holds at least that many right-to-left words.
+// - rtlParagraphMinimumWords: a line that opens left-to-right lays out
+//   right-to-left once it holds at least this many right-to-left words
+//   (0: never).
+// - rtlParagraphMinimumWordsForRTLOpeningLines: a line that opens right-to-left
+//   lays out right-to-left only when it holds at least this many right-to-left
+//   words (0 or 1: always).
 //
-// With both off (the default) the result is exactly first-strong.
+// A "word" is a maximal group of strong-RTL characters; a space or a strong-LTR
+// character ends it, while neutrals and marks (the ZWNJ inside دانش‌آموزان,
+// combining marks) do not, so such a word counts once. With both settings at 0
+// (the default) the result is exactly first-strong.
 fileprivate func detectedParagraphIsRTL(_ s: NSString) -> Bool {
     guard let ltr = NSCharacterSet.strongLTRCodePoints(),
           let rtl = NSCharacterSet.strongRTLCodePoints() else {
         return false
     }
-    let minimumWords = max(0, Int(iTermAdvancedSettingsModel.rtlParagraphMinimumWords()))
-    let latinFirstWordStaysLTR = iTermAdvancedSettingsModel.rtlParagraphLatinFirstWordStaysLTR()
+    let minimumForLTROpening = max(0, Int(iTermAdvancedSettingsModel.rtlParagraphMinimumWords()))
+    let minimumForRTLOpening = max(1, Int(iTermAdvancedSettingsModel.rtlParagraphMinimumWordsForRTLOpeningLines()))
 
     var firstStrongIsRTL: Bool? = nil
     var rtlWordCount = 0
@@ -327,13 +328,11 @@ fileprivate func detectedParagraphIsRTL(_ s: NSString) -> Bool {
             inRTLWord = false
         }
         // Stop as soon as the remaining characters cannot change the answer:
-        // the first strong character decides unless a word minimum is in play,
-        // and word counts only grow.
+        // word counts only grow, so once the relevant minimum is met (or there
+        // is none) the first strong character has decided.
         guard let opensRTL = firstStrongIsRTL else { continue }
-        if minimumWords == 0 || rtlWordCount >= minimumWords {
-            break
-        }
-        if !opensRTL && latinFirstWordStaysLTR {
+        let needed = opensRTL ? minimumForRTLOpening : minimumForLTROpening
+        if needed == 0 || rtlWordCount >= needed {
             break
         }
     }
@@ -342,15 +341,9 @@ fileprivate func detectedParagraphIsRTL(_ s: NSString) -> Bool {
         return false
     }
     if opensRTL {
-        if latinFirstWordStaysLTR && minimumWords > 0 {
-            return rtlWordCount >= minimumWords
-        }
-        return true
+        return rtlWordCount >= minimumForRTLOpening
     }
-    if latinFirstWordStaysLTR {
-        return false
-    }
-    return minimumWords > 0 && rtlWordCount >= minimumWords
+    return minimumForLTROpening > 0 && rtlWordCount >= minimumForLTROpening
 }
 
 extension IndexSet {

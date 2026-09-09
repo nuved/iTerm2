@@ -2,10 +2,10 @@
 //  RTLParagraphDirectionRuleTests.swift
 //  ModernTests
 //
-//  The paragraph-direction rules behind “auto-detect paragraph writing
-//  direction”: first-strong by default, refined by the optional advanced
-//  settings “minimum right-to-left words” and “keep lines that start with a
-//  Latin word left-to-right”.
+//  The paragraph-direction rules behind “auto-detect each line’s writing
+//  direction”: first-strong by default, refined by the two advanced settings
+//  that set a minimum number of right-to-left words for a line that starts
+//  with a Latin word and for a line that starts with a right-to-left word.
 //
 
 import XCTest
@@ -14,18 +14,19 @@ import XCTest
 class RTLParagraphDirectionRuleTests: XCTestCase {
     private let keys = ["DetectParagraphDirection",
                         "RtlParagraphMinimumWords",
-                        "RtlParagraphLatinFirstWordStaysLTR"]
+                        "RtlParagraphMinimumWordsForRTLOpeningLines"]
 
-    // Runs `body` with the given rule configuration and auto-detect on, then
-    // restores whatever the test defaults domain held before.
-    private func withRules(minimumWords: Int,
-                           latinFirstWordStaysLTR: Bool,
-                           _ body: () -> Void) {
+    // Runs `body` with the given minimums and auto-detect on, then restores
+    // whatever the test defaults domain held before.
+    private func withMinimums(latinOpening: Int,
+                              rtlOpening: Int,
+                              detect: Bool = true,
+                              _ body: () -> Void) {
         let d = iTermUserDefaults.userDefaults()
         let saved = keys.map { d.object(forKey: $0) }
-        d.set(true, forKey: "DetectParagraphDirection")
-        d.set(minimumWords, forKey: "RtlParagraphMinimumWords")
-        d.set(latinFirstWordStaysLTR, forKey: "RtlParagraphLatinFirstWordStaysLTR")
+        d.set(detect, forKey: "DetectParagraphDirection")
+        d.set(latinOpening, forKey: "RtlParagraphMinimumWords")
+        d.set(rtlOpening, forKey: "RtlParagraphMinimumWordsForRTLOpeningLines")
         iTermAdvancedSettingsModel.loadAdvancedSettingsFromUserDefaults()
         defer {
             for (key, value) in zip(keys, saved) {
@@ -55,7 +56,7 @@ class RTLParagraphDirectionRuleTests: XCTestCase {
     private let persianOpeningFiveWords = "دانش‌آموزان کلاس ما امروز آمدند to school"
 
     func testDefaultIsPureFirstStrong() {
-        withRules(minimumWords: 0, latinFirstWordStaysLTR: false) {
+        withMinimums(latinOpening: 0, rtlOpening: 0) {
             XCTAssertFalse(isRTL(promptWithThreeRTLWords), "opens LTR, stays LTR")
             XCTAssertFalse(isRTL(englishWithOneRTLWord), "opens LTR, stays LTR")
             XCTAssertTrue(isRTL(persianOpeningTwoWords), "opens RTL, is RTL")
@@ -63,62 +64,54 @@ class RTLParagraphDirectionRuleTests: XCTestCase {
         }
     }
 
-    func testMinimumWordsFlipsLatinOpeningLinesAtTheThreshold() {
-        withRules(minimumWords: 3, latinFirstWordStaysLTR: false) {
+    func testLatinOpeningMinimumFlipsAtTheThreshold() {
+        withMinimums(latinOpening: 3, rtlOpening: 0) {
             XCTAssertTrue(isRTL(promptWithThreeRTLWords), "three RTL words meet a minimum of 3")
             XCTAssertFalse(isRTL(englishWithOneRTLWord), "one RTL word is below a minimum of 3")
-            XCTAssertTrue(isRTL(persianOpeningTwoWords),
-                          "a line that opens RTL stays RTL below the minimum when the Latin-first rule is off")
+            XCTAssertTrue(isRTL(persianOpeningTwoWords), "the Latin-opening minimum does not touch RTL-opening lines")
         }
-        withRules(minimumWords: 1, latinFirstWordStaysLTR: false) {
+        withMinimums(latinOpening: 1, rtlOpening: 0) {
             XCTAssertTrue(isRTL(englishWithOneRTLWord), "one RTL word meets a minimum of 1")
         }
     }
 
-    func testLatinFirstWordStaysLTRIgnoresTheMinimum() {
-        withRules(minimumWords: 1, latinFirstWordStaysLTR: true) {
-            XCTAssertFalse(isRTL(promptWithThreeRTLWords), "Latin first word wins over three RTL words")
-            XCTAssertFalse(isRTL(englishWithOneRTLWord), "Latin first word wins over one RTL word")
+    func testRTLOpeningMinimumKeepsShortRTLOpeningLinesLTR() {
+        withMinimums(latinOpening: 0, rtlOpening: 3) {
+            XCTAssertFalse(isRTL(persianOpeningTwoWords), "opens RTL with two words, below a minimum of 3")
+            XCTAssertTrue(isRTL(persianOpeningFiveWords), "opens RTL with five words, meets a minimum of 3")
+            XCTAssertFalse(isRTL(promptWithThreeRTLWords), "the RTL-opening minimum does not touch Latin-opening lines")
         }
     }
 
-    func testLatinFirstRuleAloneKeepsRTLOpeningLinesRTL() {
-        withRules(minimumWords: 0, latinFirstWordStaysLTR: true) {
-            XCTAssertTrue(isRTL(persianOpeningTwoWords), "opens RTL, no minimum: RTL")
+    func testRTLOpeningMinimumOfOneEqualsFirstStrong() {
+        withMinimums(latinOpening: 0, rtlOpening: 1) {
+            XCTAssertTrue(isRTL(persianOpeningTwoWords), "a minimum of 1 is always met by an RTL-opening line")
             XCTAssertFalse(isRTL(promptWithThreeRTLWords), "opens LTR: LTR")
         }
     }
 
-    func testBothRulesApplyTheMinimumOnlyToRTLOpeningLines() {
-        withRules(minimumWords: 3, latinFirstWordStaysLTR: true) {
-            XCTAssertFalse(isRTL(persianOpeningTwoWords), "opens RTL with two words, below a minimum of 3")
-            XCTAssertTrue(isRTL(persianOpeningFiveWords), "opens RTL with five words, meets a minimum of 3")
-            XCTAssertFalse(isRTL(promptWithThreeRTLWords), "opens LTR: always LTR under the Latin-first rule")
+    func testBothMinimumsApplyToTheirOwnKindOfLine() {
+        withMinimums(latinOpening: 2, rtlOpening: 3) {
+            XCTAssertTrue(isRTL(promptWithThreeRTLWords), "Latin-opening with three RTL words meets its minimum of 2")
+            XCTAssertFalse(isRTL(englishWithOneRTLWord), "Latin-opening with one RTL word is below its minimum of 2")
+            XCTAssertFalse(isRTL(persianOpeningTwoWords), "RTL-opening with two words is below its minimum of 3")
+            XCTAssertTrue(isRTL(persianOpeningFiveWords), "RTL-opening with five words meets its minimum of 3")
         }
     }
 
     func testZWNJAndMarksDoNotSplitAWord() {
         // «دانش‌آموزان» holds a ZWNJ and «کاملاً» a combining fathatan; each is one word.
-        withRules(minimumWords: 3, latinFirstWordStaysLTR: false) {
+        withMinimums(latinOpening: 3, rtlOpening: 0) {
             XCTAssertFalse(isRTL("ok دانش‌آموزان کاملاً"), "two RTL words, not four, below a minimum of 3")
         }
-        withRules(minimumWords: 2, latinFirstWordStaysLTR: false) {
+        withMinimums(latinOpening: 2, rtlOpening: 0) {
             XCTAssertTrue(isRTL("ok دانش‌آموزان کاملاً"), "two RTL words meet a minimum of 2")
         }
     }
 
     func testDetectionOffMeansLTR() {
-        let d = iTermUserDefaults.userDefaults()
-        let saved = keys.map { d.object(forKey: $0) }
-        d.set(false, forKey: "DetectParagraphDirection")
-        d.set(1, forKey: "RtlParagraphMinimumWords")
-        iTermAdvancedSettingsModel.loadAdvancedSettingsFromUserDefaults()
-        defer {
-            for (key, value) in zip(keys, saved) {
-                if let value { d.set(value, forKey: key) } else { d.removeObject(forKey: key) }
-            }
-            iTermAdvancedSettingsModel.loadAdvancedSettingsFromUserDefaults()
+        withMinimums(latinOpening: 1, rtlOpening: 0, detect: false) {
+            XCTAssertFalse(isRTL(persianOpeningFiveWords), "rules only apply when auto-detect is on")
         }
-        XCTAssertFalse(isRTL(persianOpeningFiveWords), "rules only apply when auto-detect is on")
     }
 }
