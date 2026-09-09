@@ -287,20 +287,63 @@ fileprivate func makeLookupTable(_ string: NSString,
 // scalars, not UTF-16 units: surrogate halves never form a scalar, so a UTF-16
 // walk would ignore supplementary-plane strong-RTL scripts (Adlam, Hanifi
 // Rohingya) and misdetect lines written in them.
+//
+// Two optional advanced settings refine that for terminal use, where a shell
+// prompt or an agent's English label often precedes right-to-left text. Each
+// is a word minimum for one kind of line; 0 means "as first-strong decides":
+//
+// - rtlParagraphMinimumWords: a line that opens left-to-right lays out
+//   right-to-left once it holds at least this many right-to-left words
+//   (0: never).
+// - rtlParagraphMinimumWordsForRTLOpeningLines: a line that opens right-to-left
+//   lays out right-to-left only when it holds at least this many right-to-left
+//   words (0 or 1: always).
+//
+// A "word" is a maximal group of strong-RTL characters; a space or a strong-LTR
+// character ends it, while neutrals and marks (the ZWNJ inside دانش‌آموزان,
+// combining marks) do not, so such a word counts once. With both settings at 0
+// (the default) the result is exactly first-strong.
 fileprivate func detectedParagraphIsRTL(_ s: NSString) -> Bool {
     guard let ltr = NSCharacterSet.strongLTRCodePoints(),
           let rtl = NSCharacterSet.strongRTLCodePoints() else {
         return false
     }
+    let minimumForLTROpening = max(0, Int(iTermAdvancedSettingsModel.rtlParagraphMinimumWords()))
+    let minimumForRTLOpening = max(1, Int(iTermAdvancedSettingsModel.rtlParagraphMinimumWordsForRTLOpeningLines()))
+
+    var firstStrongIsRTL: Bool? = nil
+    var rtlWordCount = 0
+    var inRTLWord = false
     for scalar in (s as String).unicodeScalars {
         if rtl.contains(scalar) {
-            return true
+            if firstStrongIsRTL == nil { firstStrongIsRTL = true }
+            if !inRTLWord {
+                inRTLWord = true
+                rtlWordCount += 1
+            }
+        } else if ltr.contains(scalar) {
+            if firstStrongIsRTL == nil { firstStrongIsRTL = false }
+            inRTLWord = false
+        } else if scalar.value == 0x20 {
+            inRTLWord = false
         }
-        if ltr.contains(scalar) {
-            return false
+        // Stop as soon as the remaining characters cannot change the answer:
+        // word counts only grow, so once the relevant minimum is met (or there
+        // is none) the first strong character has decided.
+        guard let opensRTL = firstStrongIsRTL else { continue }
+        let needed = opensRTL ? minimumForRTLOpening : minimumForLTROpening
+        if needed == 0 || rtlWordCount >= needed {
+            break
         }
     }
-    return false
+
+    guard let opensRTL = firstStrongIsRTL else {
+        return false
+    }
+    if opensRTL {
+        return rtlWordCount >= minimumForRTLOpening
+    }
+    return minimumForLTROpening > 0 && rtlWordCount >= minimumForLTROpening
 }
 
 extension IndexSet {
