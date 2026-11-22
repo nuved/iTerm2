@@ -135,3 +135,10 @@ Bug Fixes:
   they got the column the mouse was in, so
   selecting Persian text selected something
   else.
+- With the “RTL direction” word minimum for
+  lines that open with a Latin word turned on,
+  a label and colon at the start of such a line
+  (“UI-6: Deploy …”) now come first when a Latin
+  word follows the colon too. Before, label and
+  word were drawn as one left-to-right phrase,
+  so the label landed after the word.
