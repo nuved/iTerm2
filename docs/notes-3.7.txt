@@ -129,3 +129,9 @@ Bug Fixes:
   they hold right-to-left text. Each cell is
   reordered by itself and stays under its
   borders. Off by default.
+- Programs that track the mouse, such as
+  Claude Code, now get the right cell when you
+  click or drag on right-to-left text. Before,
+  they got the column the mouse was in, so
+  selecting Persian text selected something
+  else.
