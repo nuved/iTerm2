@@ -118,3 +118,7 @@ Bug Fixes:
   wide-ligature ink that overflows the frame no
   longer bleeds into the next glyph or trips
   the debug overflow check.
+- Right-to-left text no longer flashes
+  unreordered for a frame while a program
+  that uses synchronized updates (such as
+  Claude Code) repaints the screen.
