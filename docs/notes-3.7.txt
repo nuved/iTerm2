@@ -95,3 +95,50 @@ Bug Fixes:
 - Double-clicking a line in the Captured Output
   tool did nothing when the Capture Output
   trigger’s command used session variables.
+- Two advanced settings refine paragraph
+  direction detection for terminal use, where
+  a prompt or an English label often precedes
+  right-to-left text. Each sets a minimum
+  number of right-to-left words: one for lines
+  that start with a Latin word (0 never flips
+  them; 5 flips a prompt followed by five
+  Persian words), one for lines that start
+  with a right-to-left word (0 or 1 keeps them
+  right-to-left as before; a higher value keeps
+  a mostly English line that opens with one
+  Persian word left-to-right). Both default to
+  0, which is plain first-strong detection. The
+  four direction settings share an “RTL
+  direction” prefix so they sit together in the
+  Advanced settings list, and each description
+  shows sample lines per value.
+- The glyph rasterizer now clears its whole
+  bitmap between glyphs instead of only the
+  glyph’s nominal frame, so cursive or
+  wide-ligature ink that overflows the frame no
+  longer bleeds into the next glyph or trips
+  the debug overflow check.
+- Right-to-left text no longer flashes
+  unreordered for a frame while a program
+  that uses synchronized updates (such as
+  Claude Code) repaints the screen.
+- A new advanced setting, “RTL direction:
+  reorder each table cell or pane on its
+  own?”, keeps tables and side-by-side panes
+  drawn with box-drawing lines intact when
+  they hold right-to-left text. Each cell is
+  reordered by itself and stays under its
+  borders. Off by default.
+- Programs that track the mouse, such as
+  Claude Code, now get the right cell when you
+  click or drag on right-to-left text. Before,
+  they got the column the mouse was in, so
+  selecting Persian text selected something
+  else.
+- With the “RTL direction” word minimum for
+  lines that open with a Latin word turned on,
+  a label and colon at the start of such a line
+  (“UI-6: Deploy …”) now come first when a Latin
+  word follows the colon too. Before, label and
+  word were drawn as one left-to-right phrase,
+  so the label landed after the word.

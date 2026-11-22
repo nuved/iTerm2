@@ -271,26 +271,165 @@ fileprivate func paragraphIsRTL(_ string: NSString, direction: iTermBidiDirectio
     }
 }
 
+// Vertical box-drawing lines. Programs draw tables and side-by-side panes
+// (tmux, editor splits) with them.
+fileprivate func isCellDivider(_ c: unichar) -> Bool {
+    switch c {
+    case 0x2502, 0x2503, 0x2506, 0x2507, 0x250A, 0x250B, 0x254E, 0x254F, 0x2551:
+        return true
+    default:
+        return false
+    }
+}
+
 // Make a lookup table that maps source cell to display cell.
 fileprivate func makeLookupTable(_ string: NSString,
                                  deltas: UnsafePointer<Int32>,
                                  count: Int,
                                  direction: iTermBidiDirection) -> ([Int32], IndexSet, IndexSet, Bool) {
+    if direction == .default,
+       iTermAdvancedSettingsModel.bidiTableCells(),
+       let perCell = makeLookupTablePerCell(string, deltas: deltas, count: count) {
+        return perCell
+    }
+    return makeLookupTableForRun(string, deltas: deltas, count: count, direction: direction)
+}
+
+// A line that holds vertical box-drawing lines is a row of a table or of
+// side-by-side panes. Reordering it as one paragraph moves text across the
+// dividers and, when the row comes out right-to-left, right-justifies it away
+// from the border rows above and below, which hold no strong characters and
+// stay put. Instead each part between dividers is laid out as its own paragraph
+// with its own direction. Dividers keep their cells and the line as a whole
+// counts as left-to-right, so it is not justified.
+//
+// Returns nil when the line has no divider.
+fileprivate func makeLookupTablePerCell(_ string: NSString,
+                                        deltas: UnsafePointer<Int32>,
+                                        count: Int) -> ([Int32], IndexSet, IndexSet, Bool)? {
+    let length = string.length
+    let dividers = (0..<length).filter { isCellDivider(string.character(at: $0)) }
+    if dividers.isEmpty {
+        return nil
+    }
+    func cell(_ stringIndex: Int) -> Int {
+        return stringIndex < length ? Int(CellOffsetFromUTF16Offset(Int32(stringIndex), deltas)) : count
+    }
+
+    var lut = Array(Int32(0)..<Int32(count))
+    var rtlIndexes = IndexSet()
+    var mirroredIndexes = IndexSet()
+    var start = 0
+    for end in dividers + [length] {
+        defer { start = end + 1 }
+        let firstCell = cell(start)
+        let cellCount = cell(end) - firstCell
+        if end <= start || cellCount <= 0 {
+            continue
+        }
+        let part = string.substring(with: NSRange(location: start, length: end - start)) as NSString
+        // deltas[i] + i is the cell of UTF-16 index i, so these are the deltas
+        // of the part taken on its own.
+        let partDeltas = (start..<end).map { deltas[$0] - deltas[start] }
+        let (partLUT, partRTL, partMirrored, _) = partDeltas.withUnsafeBufferPointer {
+            makeLookupTableForRun(part, deltas: $0.baseAddress!, count: cellCount, direction: .default)
+        }
+        if partRTL.isEmpty {
+            continue
+        }
+        for (offset, visual) in partLUT.enumerated() {
+            lut[firstCell + offset] = Int32(firstCell) + visual
+        }
+        for range in partRTL.rangeView {
+            rtlIndexes.insert(integersIn: range.shifted(by: firstCell))
+        }
+        for range in partMirrored.rangeView {
+            mirroredIndexes.insert(integersIn: range.shifted(by: firstCell))
+        }
+    }
+    return (lut, rtlIndexes, mirroredIndexes, false)
+}
+
+fileprivate func makeLookupTableForRun(_ string: NSString,
+                                       deltas: UnsafePointer<Int32>,
+                                       count: Int,
+                                       direction: iTermBidiDirection) -> ([Int32], IndexSet, IndexSet, Bool) {
     let paragraphIsRTL = paragraphIsRTL(string, direction: direction)
+    let laidOut = (paragraphIsRTL && direction == .default) ? endingLeadingLabelAtItsColon(string) : string
     // Lay the CTLine out with the same base direction the line is justified
     // with, so justification and the neutrals' resolved positions agree.
     let paragraphStyle = NSMutableParagraphStyle()
     paragraphStyle.baseWritingDirection = paragraphIsRTL ? .rightToLeft : .leftToRight
-    let attributedString = NSAttributedString(string: string as String,
+    let attributedString = NSAttributedString(string: laidOut as String,
                                               attributes: [.paragraphStyle: paragraphStyle])
     // Create a CTLine from the attributed string
     let line = CTLineCreateWithAttributedString(attributedString)
     let intermediate = IntermediateLookupTable(line: line,
-                                               string: string,
+                                               string: laidOut,
                                                deltas: deltas,
                                                count: count)
 
     return (intermediate.lut, intermediate.rtlIndexes, intermediate.mirroredIndexes, paragraphIsRTL)
+}
+
+// A line that opens with a Latin label and a colon, such as “- UI-6: Deploy در
+// دو مرحله.”, is right-to-left only because of rtlParagraphMinimumWords; first-
+// strong leaves it left-to-right. In a right-to-left paragraph that colon sits
+// between two Latin words, so label and next word form one left-to-right run
+// and “Deploy” is drawn nearest the right edge, ahead of “UI-6”. A label that
+// is followed by a right-to-left word (“- UI-5: دکمه‌ها”) leads its line, so in
+// a list the labels do not line up.
+//
+// Returns the string to lay out instead: the space after the label's colon
+// becomes U+200F (right-to-left mark). Colon and mark then resolve right-to-
+// left, which ends the label's run: the label leads, then the colon, then the
+// rest of the line. The mark is one UTF-16 unit like the space it replaces, so
+// the caller's `deltas` still apply. It has no glyph, and a cell without a
+// glyph in a right-to-left run is placed left of its predecessor, which is
+// where the space belongs.
+//
+// The label is the text before the line's first colon: anything that is not
+// strong (a list marker, indentation), then Latin letters, digits, spaces and
+// -_./#() only. Code and shell commands (quotes, braces, @) are left alone.
+fileprivate func endingLeadingLabelAtItsColon(_ string: NSString) -> NSString {
+    guard let ltr = NSCharacterSet.strongLTRCodePoints(),
+          let rtl = NSCharacterSet.strongRTLCodePoints() else {
+        return string
+    }
+    let length = string.length
+    var inLabel = false
+    for i in 0..<length {
+        let c = string.character(at: i)
+        if c == 0x3A {  // colon
+            guard inLabel, i + 1 < length, string.character(at: i + 1) == 0x20 else {
+                return string
+            }
+            let result = NSMutableString(string: string)
+            result.replaceCharacters(in: NSRange(location: i + 1, length: 1), with: "\u{200F}")
+            return result
+        }
+        guard let scalar = Unicode.Scalar(c) else {
+            return string  // half of a surrogate pair
+        }
+        if ltr.contains(scalar) {
+            inLabel = true
+        } else if rtl.contains(scalar) {
+            return string
+        } else if inLabel && !isLabelFiller(c) {
+            return string
+        }
+    }
+    return string
+}
+
+// What a label may hold besides letters: digits, space and - _ . / # ( )
+fileprivate func isLabelFiller(_ c: unichar) -> Bool {
+    switch c {
+    case 0x30...0x39, 0x20, 0x2D, 0x5F, 0x2E, 0x2F, 0x23, 0x28, 0x29:
+        return true
+    default:
+        return false
+    }
 }
 
 // A line lays out right-to-left when its first strong directional character is
@@ -298,20 +437,63 @@ fileprivate func makeLookupTable(_ string: NSString,
 // scalars, not UTF-16 units: surrogate halves never form a scalar, so a UTF-16
 // walk would ignore supplementary-plane strong-RTL scripts (Adlam, Hanifi
 // Rohingya) and misdetect lines written in them.
+//
+// Two optional advanced settings refine that for terminal use, where a shell
+// prompt or an agent's English label often precedes right-to-left text. Each
+// is a word minimum for one kind of line; 0 means "as first-strong decides":
+//
+// - rtlParagraphMinimumWords: a line that opens left-to-right lays out
+//   right-to-left once it holds at least this many right-to-left words
+//   (0: never).
+// - rtlParagraphMinimumWordsForRTLOpeningLines: a line that opens right-to-left
+//   lays out right-to-left only when it holds at least this many right-to-left
+//   words (0 or 1: always).
+//
+// A "word" is a maximal group of strong-RTL characters; a space or a strong-LTR
+// character ends it, while neutrals and marks (the ZWNJ inside دانش‌آموزان,
+// combining marks) do not, so such a word counts once. With both settings at 0
+// (the default) the result is exactly first-strong.
 fileprivate func detectedParagraphIsRTL(_ s: NSString) -> Bool {
     guard let ltr = NSCharacterSet.strongLTRCodePoints(),
           let rtl = NSCharacterSet.strongRTLCodePoints() else {
         return false
     }
+    let minimumForLTROpening = max(0, Int(iTermAdvancedSettingsModel.rtlParagraphMinimumWords()))
+    let minimumForRTLOpening = max(1, Int(iTermAdvancedSettingsModel.rtlParagraphMinimumWordsForRTLOpeningLines()))
+
+    var firstStrongIsRTL: Bool? = nil
+    var rtlWordCount = 0
+    var inRTLWord = false
     for scalar in (s as String).unicodeScalars {
         if rtl.contains(scalar) {
-            return true
+            if firstStrongIsRTL == nil { firstStrongIsRTL = true }
+            if !inRTLWord {
+                inRTLWord = true
+                rtlWordCount += 1
+            }
+        } else if ltr.contains(scalar) {
+            if firstStrongIsRTL == nil { firstStrongIsRTL = false }
+            inRTLWord = false
+        } else if scalar.value == 0x20 {
+            inRTLWord = false
         }
-        if ltr.contains(scalar) {
-            return false
+        // Stop as soon as the remaining characters cannot change the answer:
+        // word counts only grow, so once the relevant minimum is met (or there
+        // is none) the first strong character has decided.
+        guard let opensRTL = firstStrongIsRTL else { continue }
+        let needed = opensRTL ? minimumForRTLOpening : minimumForLTROpening
+        if needed == 0 || rtlWordCount >= needed {
+            break
         }
     }
-    return false
+
+    guard let opensRTL = firstStrongIsRTL else {
+        return false
+    }
+    if opensRTL {
+        return rtlWordCount >= minimumForRTLOpening
+    }
+    return minimumForLTROpening > 0 && rtlWordCount >= minimumForLTROpening
 }
 
 extension IndexSet {
