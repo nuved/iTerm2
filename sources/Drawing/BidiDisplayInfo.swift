@@ -271,11 +271,89 @@ fileprivate func paragraphIsRTL(_ string: NSString, direction: iTermBidiDirectio
     }
 }
 
+// Vertical box-drawing lines. Programs draw tables and side-by-side panes
+// (tmux, editor splits) with them.
+fileprivate func isCellDivider(_ c: unichar) -> Bool {
+    switch c {
+    case 0x2502, 0x2503, 0x2506, 0x2507, 0x250A, 0x250B, 0x254E, 0x254F, 0x2551:
+        return true
+    default:
+        return false
+    }
+}
+
 // Make a lookup table that maps source cell to display cell.
 fileprivate func makeLookupTable(_ string: NSString,
                                  deltas: UnsafePointer<Int32>,
                                  count: Int,
                                  direction: iTermBidiDirection) -> ([Int32], IndexSet, IndexSet, Bool) {
+    if direction == .default,
+       iTermAdvancedSettingsModel.bidiTableCells(),
+       let perCell = makeLookupTablePerCell(string, deltas: deltas, count: count) {
+        return perCell
+    }
+    return makeLookupTableForRun(string, deltas: deltas, count: count, direction: direction)
+}
+
+// A line that holds vertical box-drawing lines is a row of a table or of
+// side-by-side panes. Reordering it as one paragraph moves text across the
+// dividers and, when the row comes out right-to-left, right-justifies it away
+// from the border rows above and below, which hold no strong characters and
+// stay put. Instead each part between dividers is laid out as its own paragraph
+// with its own direction. Dividers keep their cells and the line as a whole
+// counts as left-to-right, so it is not justified.
+//
+// Returns nil when the line has no divider.
+fileprivate func makeLookupTablePerCell(_ string: NSString,
+                                        deltas: UnsafePointer<Int32>,
+                                        count: Int) -> ([Int32], IndexSet, IndexSet, Bool)? {
+    let length = string.length
+    let dividers = (0..<length).filter { isCellDivider(string.character(at: $0)) }
+    if dividers.isEmpty {
+        return nil
+    }
+    func cell(_ stringIndex: Int) -> Int {
+        return stringIndex < length ? Int(CellOffsetFromUTF16Offset(Int32(stringIndex), deltas)) : count
+    }
+
+    var lut = Array(Int32(0)..<Int32(count))
+    var rtlIndexes = IndexSet()
+    var mirroredIndexes = IndexSet()
+    var start = 0
+    for end in dividers + [length] {
+        defer { start = end + 1 }
+        let firstCell = cell(start)
+        let cellCount = cell(end) - firstCell
+        if end <= start || cellCount <= 0 {
+            continue
+        }
+        let part = string.substring(with: NSRange(location: start, length: end - start)) as NSString
+        // deltas[i] + i is the cell of UTF-16 index i, so these are the deltas
+        // of the part taken on its own.
+        let partDeltas = (start..<end).map { deltas[$0] - deltas[start] }
+        let (partLUT, partRTL, partMirrored, _) = partDeltas.withUnsafeBufferPointer {
+            makeLookupTableForRun(part, deltas: $0.baseAddress!, count: cellCount, direction: .default)
+        }
+        if partRTL.isEmpty {
+            continue
+        }
+        for (offset, visual) in partLUT.enumerated() {
+            lut[firstCell + offset] = Int32(firstCell) + visual
+        }
+        for range in partRTL.rangeView {
+            rtlIndexes.insert(integersIn: range.shifted(by: firstCell))
+        }
+        for range in partMirrored.rangeView {
+            mirroredIndexes.insert(integersIn: range.shifted(by: firstCell))
+        }
+    }
+    return (lut, rtlIndexes, mirroredIndexes, false)
+}
+
+fileprivate func makeLookupTableForRun(_ string: NSString,
+                                       deltas: UnsafePointer<Int32>,
+                                       count: Int,
+                                       direction: iTermBidiDirection) -> ([Int32], IndexSet, IndexSet, Bool) {
     let paragraphIsRTL = paragraphIsRTL(string, direction: direction)
     // Lay the CTLine out with the same base direction the line is justified
     // with, so justification and the neutrals' resolved positions agree.

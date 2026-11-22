@@ -480,6 +480,7 @@ extern NSString *const iTermAdvancedSettingsDidChange;
 + (BOOL)rightJustifyRTLLines;
 + (int)rtlParagraphMinimumWords;
 + (int)rtlParagraphMinimumWordsForRTLOpeningLines;
++ (BOOL)bidiTableCells;
 + (BOOL)runJobsInServers;
 + (BOOL)saveToPasteHistoryWhenSecureInputEnabled;
 + (double)scrollWheelAcceleration;

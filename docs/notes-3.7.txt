@@ -122,3 +122,10 @@ Bug Fixes:
   unreordered for a frame while a program
   that uses synchronized updates (such as
   Claude Code) repaints the screen.
+- A new advanced setting, “RTL direction:
+  reorder each table cell or pane on its
+  own?”, keeps tables and side-by-side panes
+  drawn with box-drawing lines intact when
+  they hold right-to-left text. Each cell is
+  reordered by itself and stays under its
+  borders. Off by default.
